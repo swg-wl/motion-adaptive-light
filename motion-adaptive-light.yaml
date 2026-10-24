@@ -23,7 +23,8 @@ blueprint:
     controlled lamps), so there is no feedback loop: the values are
     recalculated on every motion event, even if the light is already on.
   domain: automation
-  min_version: 2024.10.0
+  homeassistant:
+    min_version: 2024.10.0
   input:
     motion_sensor:
       name: Motion sensor
