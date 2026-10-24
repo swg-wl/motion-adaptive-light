@@ -72,7 +72,7 @@ blueprint:
     no_motion_wait:
       name: Wait time
       description: Seconds to wait after motion ends before turning the lights off.
-      default: 120
+      default: 0
       selector:
         number:
           min: 0
