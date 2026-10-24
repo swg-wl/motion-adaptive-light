@@ -1,14 +1,11 @@
 blueprint:
   name: Motion Light with Scene Restore
   description: >
-    When there is no motion, saves the current state of all selected light
-    sources (on/off, brightness, color, etc.) into a temporary scene and then
-    turns them off. When motion is detected, restores the saved scene and
-    deletes it. If there is no saved scene (first run, Home Assistant restart),
-    it simply turns all sources on.
+    When there is no motion, saves the state of all selected light sources
+    into a temporary scene and turns them off. When motion is detected,
+    restores the saved scene and deletes it. If there is no saved scene,
+    simply turns the sources on using their own device settings.
   domain: automation
-  homeassistant:
-    min_version: 2024.10.0
   input:
     motion_sensor:
       name: Motion sensor
@@ -22,8 +19,6 @@ blueprint:
                 - presence
     lights:
       name: Light sources
-      description: >
-        All entities whose state should be saved, turned off and restored.
       selector:
         entity:
           multiple: true
@@ -33,69 +28,20 @@ blueprint:
                 - switch
     no_motion_wait:
       name: No-motion delay
-      description: How long after motion stops before the lights are turned off.
       default:
         hours: 0
         minutes: 5
         seconds: 0
       selector:
         duration:
-    restore_transition:
-      name: Restore transition (sec)
-      description: Transition time when restoring the scene (only for lights that support transition).
-      default: 1
-      selector:
-        number:
-          min: 0
-          max: 30
-          step: 0.5
-          unit_of_measurement: s
-          mode: slider
-    lux_sensor:
-      name: Illuminance sensor (optional)
-      description: If set, the lights turn on only when it is dark.
-      default: ""
-      selector:
-        entity:
-          filter:
-            - domain: sensor
-              device_class: illuminance
-    lux_threshold:
-      name: Illuminance threshold (lx)
-      description: Lights turn on when illuminance is below this value.
-      default: 30
-      selector:
-        number:
-          min: 0
-          max: 1000
-          step: 1
-          unit_of_measurement: lx
-          mode: box
-    override_entity:
-      name: Automation override (optional)
-      description: >
-        A switch (input_boolean / switch). While it is on, the automation does
-        nothing, which is handy for "movie" or "night" modes.
-      default: ""
-      selector:
-        entity:
-          filter:
-            - domain:
-                - input_boolean
-                - switch
- 
+
 mode: restart
- 
+
 variables:
   lights: !input lights
-  lux_sensor: !input lux_sensor
-  lux_threshold: !input lux_threshold
-  override_entity: !input override_entity
-  restore_transition: !input restore_transition
-  # Unique scene id for each automation instance
   scene_id: "motion_snapshot_{{ this.entity_id.split('.')[1] }}"
   scene_entity: "scene.{{ scene_id }}"
- 
+
 triggers:
   - trigger: state
     entity_id: !input motion_sensor
@@ -106,25 +52,13 @@ triggers:
     to: "off"
     for: !input no_motion_wait
     id: motion_off
- 
-conditions:
-  - alias: Automation is not overridden
-    condition: template
-    value_template: >
-      {{ override_entity == '' or not is_state(override_entity, 'on') }}
- 
+
 actions:
   - choose:
-      # ---------- Motion detected ----------
       - alias: Motion - restore the scene
         conditions:
           - condition: trigger
             id: motion_on
-          - alias: It is dark enough (if an illuminance sensor is set)
-            condition: template
-            value_template: >
-              {{ lux_sensor == ''
-                 or states(lux_sensor) | float(0) < lux_threshold | float(0) }}
         sequence:
           - choose:
               - alias: Saved scene exists - restore and delete it
@@ -135,18 +69,15 @@ actions:
                   - action: scene.turn_on
                     target:
                       entity_id: "{{ scene_entity }}"
-                    data:
-                      transition: "{{ restore_transition }}"
                   - action: scene.delete
                     target:
                       entity_id: "{{ scene_entity }}"
             default:
-              - alias: No scene - just turn everything on
+              - alias: No scene - turn on with device defaults
                 action: homeassistant.turn_on
                 target:
                   entity_id: "{{ lights }}"
- 
-      # ---------- No motion ----------
+
       - alias: No motion - save state and turn off
         conditions:
           - condition: trigger
@@ -156,13 +87,10 @@ actions:
             value_template: >
               {{ expand(lights) | selectattr('state', 'eq', 'on') | list | count > 0 }}
         sequence:
-          - alias: Save state into a temporary scene
-            action: scene.create
+          - action: scene.create
             data:
               scene_id: "{{ scene_id }}"
               snapshot_entities: "{{ lights }}"
-          - alias: Turn off all light sources
-            action: homeassistant.turn_off
+          - action: homeassistant.turn_off
             target:
               entity_id: "{{ lights }}"
- 
