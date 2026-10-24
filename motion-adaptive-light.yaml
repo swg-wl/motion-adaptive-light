@@ -296,7 +296,7 @@ actions:
       target_brightness: >-
         {% set xs = lux_xs | map('float') | list %}
         {% set ys = lux_ys | map('float') | list %}
-        {% set pts = xs | zip(ys) | list | sort %}
+        {% set pts = zip(xs, ys) | list | sort %}
         {% set v = lux_value %}
         {% if v is none %}
           {{ fallback_br | int }}
@@ -320,7 +320,7 @@ actions:
           {% set tx.xs = tx.xs + [p[0] | int * 60 + p[1] | int] %}
         {% endfor %}
         {% set ys = time_ys | map('float') | list %}
-        {% set pts = tx.xs | zip(ys) | list | sort %}
+        {% set pts = zip(tx.xs, ys) | list | sort %}
         {% set n = now() %}
         {% set m = n.hour * 60 + n.minute + n.second / 60 %}
         {% set first = pts[0] %}
