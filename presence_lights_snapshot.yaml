@@ -1,0 +1,81 @@
+blueprint:
+  name: Turn lights on and off by presence (with state saving)
+  description: >
+    When motion/presence clears, saves the current state of selected light sources
+    (on/off, brightness, color, temperature) and turns them off.
+    When presence is detected, restores the state exactly as it was.
+  domain: automation
+  input:
+    presence_sensor:
+      name: Presence / Motion Sensor
+      description: Select the sensor responding to presence.
+      selector:
+        entity:
+          filter:
+            - domain: binary_sensor
+    target_lights:
+      name: Light Sources
+      description: Select the lamps whose state should be saved and restored.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: light
+    no_motion_wait:
+      name: Turn-off Delay
+      description: Time without presence before turning off the light.
+      default: 2
+      selector:
+        number:
+          min: 0
+          max: 60
+          unit_of_measurement: minutes
+          mode: slider
+    snapshot_scene_id:
+      name: Unique Scene ID
+      description: >
+        Unique name for the temporary state snapshot (Latin letters without spaces, e.g.: living_room_snapshot).
+        Must be unique for each room!
+      default: presence_snapshot_room
+      selector:
+        text:
+
+mode: single
+
+trigger:
+  - platform: state
+    entity_id: !input presence_sensor
+    from: "off"
+    to: "on"
+    id: presence_detected
+  - platform: state
+    entity_id: !input presence_sensor
+    from: "on"
+    to: "off"
+    for:
+      minutes: !input no_motion_wait
+    id: presence_cleared
+
+action:
+  - choose:
+      # Presence detected -> restore saved scene
+      - conditions:
+          - condition: trigger
+            id: presence_detected
+        sequence:
+          - service: scene.turn_on
+            target:
+              entity_id: "scene.{{ inputs.snapshot_scene_id }}"
+
+      # Presence cleared -> save state and turn off lights
+      - conditions:
+          - condition: trigger
+            id: presence_cleared
+        sequence:
+          - service: scene.create
+            data:
+              scene_id: !input snapshot_scene_id
+              snapshot_entities: !input target_lights
+          - service: light.turn_off
+            target:
+              entity_id: !input target_lights
