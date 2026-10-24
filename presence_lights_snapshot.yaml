@@ -87,10 +87,32 @@ actions:
             value_template: >
               {{ expand(lights) | selectattr('state', 'eq', 'on') | list | count > 0 }}
         sequence:
-          - action: scene.create
+          - alias: Save state without the effect attribute
+            action: scene.create
             data:
               scene_id: "{{ scene_id }}"
-              snapshot_entities: "{{ lights }}"
+              snapshot_entities: "{{ lights | reject('match', 'light\\.') | list }}"
+              entities: >-
+                {%- set ns = namespace(d={}) -%}
+                {%- for e in expand(lights) | selectattr('domain', 'eq', 'light') -%}
+                  {%- set a = e.attributes -%}
+                  {%- set mode = a.get('color_mode') -%}
+                  {%- set item = {'state': e.state} -%}
+                  {%- if e.state == 'on' -%}
+                    {%- if a.get('brightness') is not none -%}
+                      {%- set item = item | combine({'brightness': a.get('brightness')}) -%}
+                    {%- endif -%}
+                    {%- if mode is not none -%}
+                      {%- set item = item | combine({'color_mode': mode}) -%}
+                    {%- endif -%}
+                    {%- set keys = {'color_temp': 'color_temp_kelvin', 'hs': 'hs_color', 'rgb': 'rgb_color', 'xy': 'xy_color', 'rgbw': 'rgbw_color', 'rgbww': 'rgbww_color'} -%}
+                    {%- if mode in keys and a.get(keys[mode]) is not none -%}
+                      {%- set item = item | combine({keys[mode]: a.get(keys[mode])}) -%}
+                    {%- endif -%}
+                  {%- endif -%}
+                  {%- set ns.d = ns.d | combine({e.entity_id: item}) -%}
+                {%- endfor -%}
+                {{ ns.d }}
           - action: homeassistant.turn_off
             target:
               entity_id: "{{ lights }}"
