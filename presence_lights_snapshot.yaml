@@ -1,81 +1,166 @@
 blueprint:
-  name: Turn lights on and off by presence (with state saving)
+  name: Motion Light with Scene Restore
   description: >
-    When motion/presence clears, saves the current state of selected light sources
-    (on/off, brightness, color, temperature) and turns them off.
-    When presence is detected, restores the state exactly as it was.
+    When there is no motion, saves the current state of all selected light
+    sources (on/off, brightness, color, etc.) into a temporary scene and then
+    turns them off. When motion is detected, restores the saved scene and
+    deletes it. If there is no saved scene (first run, Home Assistant restart),
+    it simply turns all sources on.
   domain: automation
+  min_version: 2024.10.0
   input:
-    presence_sensor:
-      name: Presence / Motion Sensor
-      description: Select the sensor responding to presence.
+    motion_sensor:
+      name: Motion sensor
       selector:
         entity:
           filter:
             - domain: binary_sensor
-    target_lights:
-      name: Light Sources
-      description: Select the lamps whose state should be saved and restored.
+              device_class:
+                - motion
+                - occupancy
+                - presence
+    lights:
+      name: Light sources
+      description: >
+        All entities whose state should be saved, turned off and restored.
       selector:
         entity:
           multiple: true
           filter:
-            - domain: light
+            - domain:
+                - light
+                - switch
     no_motion_wait:
-      name: Turn-off Delay
-      description: Time without presence before turning off the light.
-      default: 2
+      name: No-motion delay
+      description: How long after motion stops before the lights are turned off.
+      default:
+        hours: 0
+        minutes: 5
+        seconds: 0
+      selector:
+        duration:
+    restore_transition:
+      name: Restore transition (sec)
+      description: Transition time when restoring the scene (only for lights that support transition).
+      default: 1
       selector:
         number:
           min: 0
-          max: 60
-          unit_of_measurement: minutes
+          max: 30
+          step: 0.5
+          unit_of_measurement: s
           mode: slider
-    snapshot_scene_id:
-      name: Unique Scene ID
-      description: >
-        Unique name for the temporary state snapshot (Latin letters without spaces, e.g.: living_room_snapshot).
-        Must be unique for each room!
-      default: presence_snapshot_room
+    lux_sensor:
+      name: Illuminance sensor (optional)
+      description: If set, the lights turn on only when it is dark.
+      default: ""
       selector:
-        text:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: illuminance
+    lux_threshold:
+      name: Illuminance threshold (lx)
+      description: Lights turn on when illuminance is below this value.
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 1
+          unit_of_measurement: lx
+          mode: box
+    override_entity:
+      name: Automation override (optional)
+      description: >
+        A switch (input_boolean / switch). While it is on, the automation does
+        nothing, which is handy for "movie" or "night" modes.
+      default: ""
+      selector:
+        entity:
+          filter:
+            - domain:
+                - input_boolean
+                - switch
 
-mode: single
+mode: restart
 
-trigger:
-  - platform: state
-    entity_id: !input presence_sensor
-    from: "off"
+variables:
+  lights: !input lights
+  lux_sensor: !input lux_sensor
+  lux_threshold: !input lux_threshold
+  override_entity: !input override_entity
+  restore_transition: !input restore_transition
+  # Unique scene id for each automation instance
+  scene_id: "motion_snapshot_{{ this.entity_id.split('.')[1] }}"
+  scene_entity: "scene.{{ scene_id }}"
+
+triggers:
+  - trigger: state
+    entity_id: !input motion_sensor
     to: "on"
-    id: presence_detected
-  - platform: state
-    entity_id: !input presence_sensor
-    from: "on"
+    id: motion_on
+  - trigger: state
+    entity_id: !input motion_sensor
     to: "off"
-    for:
-      minutes: !input no_motion_wait
-    id: presence_cleared
+    for: !input no_motion_wait
+    id: motion_off
 
-action:
+conditions:
+  - alias: Automation is not overridden
+    condition: template
+    value_template: >
+      {{ override_entity == '' or not is_state(override_entity, 'on') }}
+
+actions:
   - choose:
-      # Presence detected -> restore saved scene
-      - conditions:
+      # ---------- Motion detected ----------
+      - alias: Motion - restore the scene
+        conditions:
           - condition: trigger
-            id: presence_detected
+            id: motion_on
+          - alias: It is dark enough (if an illuminance sensor is set)
+            condition: template
+            value_template: >
+              {{ lux_sensor == ''
+                 or states(lux_sensor) | float(0) < lux_threshold | float(0) }}
         sequence:
-          - service: scene.turn_on
-            target:
-              entity_id: "scene.{{ inputs.snapshot_scene_id }}"
+          - choose:
+              - alias: Saved scene exists - restore and delete it
+                conditions:
+                  - condition: template
+                    value_template: "{{ expand(scene_entity) | count > 0 }}"
+                sequence:
+                  - action: scene.turn_on
+                    target:
+                      entity_id: "{{ scene_entity }}"
+                    data:
+                      transition: "{{ restore_transition }}"
+                  - action: scene.delete
+                    target:
+                      entity_id: "{{ scene_entity }}"
+            default:
+              - alias: No scene - just turn everything on
+                action: homeassistant.turn_on
+                target:
+                  entity_id: "{{ lights }}"
 
-      # Presence cleared -> save state and turn off lights
-      - conditions:
+      # ---------- No motion ----------
+      - alias: No motion - save state and turn off
+        conditions:
           - condition: trigger
-            id: presence_cleared
+            id: motion_off
+          - alias: At least one light source is on
+            condition: template
+            value_template: >
+              {{ expand(lights) | selectattr('state', 'eq', 'on') | list | count > 0 }}
         sequence:
-          - service: scene.create
+          - alias: Save state into a temporary scene
+            action: scene.create
             data:
-              scene_id: !input snapshot_scene_id
-              snapshot_entities: !input target_lights
-          - service: light.turn_off
+              scene_id: "{{ scene_id }}"
+              snapshot_entities: "{{ lights }}"
+          - alias: Turn off all light sources
+            action: homeassistant.turn_off
             target:
-              entity_id: !input target_lights
+              entity_id: "{{ lights }}"
