@@ -11,7 +11,8 @@ blueprint:
     calculated by linear interpolation on every turn-on:
     "outdoor illuminance (lux) → brightness (%)" (5 points, clamped outside
     the outermost points) and "time of day → Kelvin" (5 points, the curve
-    wraps around midnight). Points can be entered in any order.
+    wraps around midnight). Points can be entered in any order. A brightness
+    of 0 means "do not turn the dimmable lights on" (e.g. in daylight).
 
     - **On/off-only lights** (lights or switches without dimming) — simply
     turned on and off. They are turned on only if the outdoor illuminance is
@@ -93,10 +94,11 @@ blueprint:
           mode: box
     fallback_brightness:
       name: Brightness when the illuminance sensor is unavailable
+      description: 0 = do not turn the dimmable lights on.
       default: 100
       selector:
         number:
-          min: 1
+          min: 0
           max: 100
           unit_of_measurement: "%"
           mode: slider
@@ -132,7 +134,7 @@ blueprint:
           default: 100
           selector: &br_sel
             number:
-              min: 1
+              min: 0
               max: 100
               unit_of_measurement: "%"
               mode: slider
@@ -311,7 +313,7 @@ actions:
               {% set ns.done = true %}
             {% endif %}
           {% endfor %}
-          {{ [[ns.r | round(0) | int, 1] | max, 100] | min }}
+          {{ [[ns.r | round(0) | int, 0] | max, 100] | min }}
         {% endif %}
       target_kelvin: >-
         {% set tx = namespace(xs=[]) %}
@@ -344,10 +346,10 @@ actions:
         {% endif %}
         {{ ns.r | round(0) | int }}
 
-  - alias: Turn on dimmable / tunable lights with calculated values
+  - alias: Turn on dimmable / tunable lights with calculated values (skipped if brightness is 0)
     if:
       - condition: template
-        value_template: "{{ lights | count > 0 }}"
+        value_template: "{{ lights | count > 0 and target_brightness | int(0) > 0 }}"
     then:
       - action: light.turn_on
         target:
