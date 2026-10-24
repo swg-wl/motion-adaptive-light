@@ -1,0 +1,291 @@
+blueprint:
+  name: Motion-activated Light (adaptive lux & time)
+  description: >
+    Turns the light on when motion is detected and turns it off after the
+    configured wait time once motion has ended.
+
+
+    On every turn-on, brightness and color temperature are calculated by
+    linear interpolation:
+
+    - **brightness** — from a "outdoor illuminance (lux) → brightness (%)" table of
+    5 points (outside the outermost points the value stays clamped);
+
+    - **color temperature** — from a "time of day → Kelvin" table of 5 points
+    (the curve wraps around midnight: between the last and the first point
+    the value changes smoothly through 00:00).
+
+
+    Points can be entered in any order — they are sorted automatically.
+
+
+    The illuminance sensor is expected to be **outdoors** (it does not see the
+    controlled lamps), so there is no feedback loop: the values are
+    recalculated on every motion event, even if the light is already on.
+  domain: automation
+  min_version: 2024.10.0
+  input:
+    motion_sensor:
+      name: Motion sensor
+      selector:
+        entity:
+          filter:
+            - domain: binary_sensor
+              device_class: motion
+    light_entities:
+      name: Light
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: light
+    lux_sensor:
+      name: Outdoor illuminance sensor
+      description: Sensor located outside; it must not be affected by the lamps.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: illuminance
+    no_motion_wait:
+      name: Wait time
+      description: Seconds to wait after motion ends before turning the light off.
+      default: 120
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: sec
+          mode: box
+    fallback_brightness:
+      name: Brightness when the illuminance sensor is unavailable
+      default: 100
+      selector:
+        number:
+          min: 1
+          max: 100
+          unit_of_measurement: "%"
+          mode: slider
+
+    lux_curve:
+      name: Outdoor illuminance → brightness
+      icon: mdi:brightness-6
+      collapsed: false
+      input:
+        lux_1:
+          name: Point 1 — illuminance
+          default: 0
+          selector: &lux_sel
+            number:
+              min: 0
+              max: 100000
+              unit_of_measurement: lx
+              mode: box
+        brightness_1:
+          name: Point 1 — brightness
+          default: 100
+          selector: &br_sel
+            number:
+              min: 1
+              max: 100
+              unit_of_measurement: "%"
+              mode: slider
+        lux_2:
+          name: Point 2 — illuminance
+          default: 100
+          selector: *lux_sel
+        brightness_2:
+          name: Point 2 — brightness
+          default: 80
+          selector: *br_sel
+        lux_3:
+          name: Point 3 — illuminance
+          default: 1000
+          selector: *lux_sel
+        brightness_3:
+          name: Point 3 — brightness
+          default: 50
+          selector: *br_sel
+        lux_4:
+          name: Point 4 — illuminance
+          default: 10000
+          selector: *lux_sel
+        brightness_4:
+          name: Point 4 — brightness
+          default: 25
+          selector: *br_sel
+        lux_5:
+          name: Point 5 — illuminance
+          default: 40000
+          selector: *lux_sel
+        brightness_5:
+          name: Point 5 — brightness
+          default: 5
+          selector: *br_sel
+
+    time_curve:
+      name: Time of day → color temperature
+      icon: mdi:thermometer-lines
+      collapsed: false
+      input:
+        time_1:
+          name: Point 1 — time
+          default: "00:00:00"
+          selector: &time_sel
+            time:
+        kelvin_1:
+          name: Point 1 — temperature
+          default: 2200
+          selector: &k_sel
+            number:
+              min: 1500
+              max: 7000
+              step: 50
+              unit_of_measurement: K
+              mode: slider
+        time_2:
+          name: Point 2 — time
+          default: "06:00:00"
+          selector: *time_sel
+        kelvin_2:
+          name: Point 2 — temperature
+          default: 3000
+          selector: *k_sel
+        time_3:
+          name: Point 3 — time
+          default: "12:00:00"
+          selector: *time_sel
+        kelvin_3:
+          name: Point 3 — temperature
+          default: 5000
+          selector: *k_sel
+        time_4:
+          name: Point 4 — time
+          default: "18:00:00"
+          selector: *time_sel
+        kelvin_4:
+          name: Point 4 — temperature
+          default: 3500
+          selector: *k_sel
+        time_5:
+          name: Point 5 — time
+          default: "22:00:00"
+          selector: *time_sel
+        kelvin_5:
+          name: Point 5 — temperature
+          default: 2500
+          selector: *k_sel
+
+mode: restart
+max_exceeded: silent
+
+triggers:
+  - trigger: state
+    entity_id: !input motion_sensor
+    from: "off"
+    to: "on"
+
+actions:
+  - alias: Prepare data and interpolate
+    variables:
+      lux_entity: !input lux_sensor
+      fallback_br: !input fallback_brightness
+      lux_xs:
+        - !input lux_1
+        - !input lux_2
+        - !input lux_3
+        - !input lux_4
+        - !input lux_5
+      lux_ys:
+        - !input brightness_1
+        - !input brightness_2
+        - !input brightness_3
+        - !input brightness_4
+        - !input brightness_5
+      time_xs:
+        - !input time_1
+        - !input time_2
+        - !input time_3
+        - !input time_4
+        - !input time_5
+      time_ys:
+        - !input kelvin_1
+        - !input kelvin_2
+        - !input kelvin_3
+        - !input kelvin_4
+        - !input kelvin_5
+      lux_value: "{{ states(lux_entity) | float(none) }}"
+      target_brightness: >-
+        {% set xs = lux_xs | map('float') | list %}
+        {% set ys = lux_ys | map('float') | list %}
+        {% set pts = xs | zip(ys) | list | sort %}
+        {% set v = lux_value %}
+        {% if v is none %}
+          {{ fallback_br | int }}
+        {% else %}
+          {% set ns = namespace(r=pts[-1][1], done=false) %}
+          {% for i in range(4) %}
+            {% if not ns.done and v <= pts[i + 1][0] %}
+              {% set d = pts[i + 1][0] - pts[i][0] %}
+              {% set t = 0 if d <= 0 else (v - pts[i][0]) / d %}
+              {% set t = [[t, 0] | max, 1] | min %}
+              {% set ns.r = pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t %}
+              {% set ns.done = true %}
+            {% endif %}
+          {% endfor %}
+          {{ [[ns.r | round(0) | int, 1] | max, 100] | min }}
+        {% endif %}
+      target_kelvin: >-
+        {% set tx = namespace(xs=[]) %}
+        {% for t in time_xs %}
+          {% set p = (t | string).split(':') %}
+          {% set tx.xs = tx.xs + [p[0] | int * 60 + p[1] | int] %}
+        {% endfor %}
+        {% set ys = time_ys | map('float') | list %}
+        {% set pts = tx.xs | zip(ys) | list | sort %}
+        {% set n = now() %}
+        {% set m = n.hour * 60 + n.minute + n.second / 60 %}
+        {% set first = pts[0] %}
+        {% set last = pts[-1] %}
+        {% set ns = namespace(r=last[1], done=false) %}
+        {% if m < first[0] or m >= last[0] %}
+          {# segment through midnight: from the last point to the first #}
+          {% set span = first[0] + 1440 - last[0] %}
+          {% set mm = m if m >= last[0] else m + 1440 %}
+          {% set t = 0 if span <= 0 else (mm - last[0]) / span %}
+          {% set ns.r = last[1] + (first[1] - last[1]) * t %}
+        {% else %}
+          {% for i in range(4) %}
+            {% if not ns.done and m < pts[i + 1][0] %}
+              {% set d = pts[i + 1][0] - pts[i][0] %}
+              {% set t = 0 if d <= 0 else (m - pts[i][0]) / d %}
+              {% set ns.r = pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t %}
+              {% set ns.done = true %}
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+        {{ ns.r | round(0) | int }}
+
+  - alias: Turn on the light with calculated values
+    action: light.turn_on
+    target:
+      entity_id: !input light_entities
+    data:
+      brightness_pct: "{{ target_brightness }}"
+      color_temp_kelvin: "{{ target_kelvin }}"
+
+  - alias: Wait until motion ends
+    wait_for_trigger:
+      - trigger: state
+        entity_id: !input motion_sensor
+        from: "on"
+        to: "off"
+
+  - alias: Wait the configured time
+    delay:
+      seconds: !input no_motion_wait
+
+  - alias: Turn off the light
+    action: light.turn_off
+    target:
+      entity_id: !input light_entities
